@@ -1,0 +1,50 @@
+name: Build Money Manager APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Extract project ZIP
+        run: |
+          mkdir extracted
+          unzip -q MoneyManager-6.0.1-GitHub-Ready-Download.zip -d extracted
+          find extracted -name package.json -print
+          PROJECT_DIR="$(dirname "$(find extracted -name package.json -print -quit)")"
+          test -n "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run tests and install dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          npm install
+          npm test
+
+      - name: Build Android APK
+        run: |
+          cd "$PROJECT_DIR"
+          npx cap add android
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoneyManager-apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          
