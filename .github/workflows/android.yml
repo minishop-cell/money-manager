@@ -21,7 +21,7 @@ jobs:
       - name: Extract project ZIP
         run: |
           mkdir extracted
-          unzip -q MoneyManager-6.0.1-GitHub-Ready-Download.zip -d extracted
+          unzip -q MoneyManager-6.0.2-Monthly-Insights-Preview.zip -d extracted
           find extracted -name package.json -print
           PROJECT_DIR="$(dirname "$(find extracted -name package.json -print -quit)")"
           test -n "$PROJECT_DIR"
