@@ -1,3 +1,4 @@
+
 name: Build Money Manager APK
 
 on:
@@ -5,9 +6,19 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    env:
+      KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -17,40 +28,87 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          
-      - name: Extract project ZIP
-        run: |
-          mkdir extracted
-          unzip -q MoneyManager-6.0.2-Monthly-Insights-Preview.zip -d extracted
-          find extracted -name package.json -print
-          PROJECT_DIR="$(dirname "$(find extracted -name package.json -print -quit)")"
-          test -n "$PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
+
+      - name: Extract project ZIP
+        run: |
+          mkdir extracted
+          unzip -q MoneyManager-6.0.2-Monthly-Insights-Preview.zip -d extracted
+          PROJECT_DIR="$(dirname "$(find extracted -name package.json -print -quit)")"
+          test -n "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Run tests and install dependencies
         run: |
           cd "$PROJECT_DIR"
-          npm install
+          npm install --no-audit --no-fund
           npm test
 
-      - name: Build Android APK
+      - name: Create Android project
         run: |
           cd "$PROJECT_DIR"
           npx cap add android
-          npx cap sync android
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug
 
-      - name: Upload APK
+      - name: Sync web files
+        run: |
+          cd "$PROJECT_DIR"
+          npx cap sync android
+
+      - name: Set app version
+        run: |
+          cd "$PROJECT_DIR"
+          VERSION=$(node -p "require('./package.json').version")
+          sed -i "s/versionCode [0-9]*/versionCode ${GITHUB_RUN_NUMBER}/; s/versionName \"[^\"]*\"/versionName \"${VERSION}\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/MoneyManager-debug.apk"
+
+      - name: Check signing secrets
+        run: |
+          test -n "$KS"
+          test -n "$KS_PASS"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASS"
+
+      - name: Build and sign release APK
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        run: |
+          ./gradlew assembleRelease --no-daemon
+
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+          "$BT/zipalign" -p -f 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$RUNNER_TEMP/aligned.apk"
+
+          "$BT/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.jks" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KS_PASS \
+            --key-pass env:KEY_PASS \
+            --out "$GITHUB_WORKSPACE/MoneyManager-release.apk" \
+            "$RUNNER_TEMP/aligned.apk"
+
+          "$BT/apksigner" verify --verbose "$GITHUB_WORKSPACE/MoneyManager-release.apk"
+
+          rm -f "$RUNNER_TEMP/release.jks" "$RUNNER_TEMP/aligned.apk"
+
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: MoneyManager-apk
-          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            MoneyManager-debug.apk
+            MoneyManager-release.apk
           if-no-files-found: error
-          
